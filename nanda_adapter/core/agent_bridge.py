@@ -4,9 +4,11 @@ import uuid
 import traceback
 import json
 import threading
+# For HTTP
 import requests
 from typing import Optional
 from datetime import datetime
+# Anthropic SDK and Claude Calls 
 from anthropic import Anthropic, APIStatusError
 from python_a2a import (
     A2AServer, A2AClient, run_server,
@@ -19,20 +21,24 @@ import base64
 import sys
 sys.stdout.reconfigure(line_buffering=True)
 
+# Reads the API key from env; otherwise falls back to the literal "your key"
 # Set API key through environment variable or directly in the code
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY") or "your key"
 
 # Toggle for message improvement feature
 IMPROVE_MESSAGES = os.getenv("IMPROVE_MESSAGES", "true").lower() in ("true", "1", "yes", "y")
 
+#instantiates a reusable Anthropic client
 # Create Anthropic client with explicit API key
 anthropic = Anthropic(api_key=ANTHROPIC_API_KEY)
 
 # Get agent configuration from environment variables
 def get_agent_id():
     """Get AGENT_ID dynamically from environment variables"""
+    # AGENT_ID names this agent for registry/logging
     return os.getenv("AGENT_ID", "default")
 
+# Exposes 2 ports: the main service and a terminal A2A endpoint for testing
 PORT = int(os.getenv("PORT", "6000"))
 TERMINAL_PORT = int(os.getenv("TERMINAL_PORT", "6010"))
 
@@ -40,26 +46,34 @@ TERMINAL_PORT = int(os.getenv("TERMINAL_PORT", "6010"))
 LOCAL_TERMINAL_URL = f"http://localhost:{TERMINAL_PORT}/a2a"
 
 # UI client support
+#flags for a browser/UI client to subscribe to updates 
 UI_MODE = os.getenv("UI_MODE", "true").lower() in ("true", "1", "yes", "y")
 UI_CLIENT_URL = os.getenv("UI_CLIENT_URL", "")
+# we set registered_ui_clients. we will add to it later. 
 registered_ui_clients = set()
 
 # Set up logging directory
+# makes sure a local folder exists to store JSONL conversion logs 
 LOG_DIR = os.getenv("LOG_DIR", "conversation_logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # Configure system prompts based on agent ID (examples from the original code)
+# Per-agent system prompts
 SYSTEM_PROMPTS = {
     "default": "You are Claude assisting a user (Agent). Assume the messages you get are part of a conversation with other agents. Help the user communicate effectively with other agents."
 }
 
 # Configure message improvement prompts
+# prmopt to improve user messages before forwarding. 
 IMPROVE_MESSAGE_PROMPTS = {    
     "default": "Improve the following message to make it more clear, compelling, and professional without changing the core content or adding fictional information. Keep the same overall meaning but enhance the phrasing and structure. Don't make it too verbose - keep it concise but impactful. Return only the improved message without explanations or introductions."
 }
 
+# Smithery API keys for MCP servers
 SMITHERY_API_KEY = os.getenv("SMITHERY_API_KEY") or "bfcb8cec-9d56-4957-8156-bced0bfca532"
 
+# Reads registry_url.txt if it is there. Or it defaults to chat.nanda.registry.com:6900
+# Announce itself to find other agents by ID so A2A messages can be routed
 def get_registry_url():
     """Get the registry URL from file or use default"""
     try:
@@ -76,13 +90,19 @@ def get_registry_url():
     print(f"Using default registry URL: {default_url}")
     return default_url
 
+# sends {agent_id, agent_url, api_url } to POST {registry}/register
+# Announce itself to find other agents by ID so A2A messages can be routed
 def register_with_registry(agent_id, agent_url, api_url):
     """Register this agent with the registry"""
     registry_url = get_registry_url()
     try:
         # Add /a2a to the URL during registration
+        # IT ISN'T ADDING A2A TO THE URL
         if not agent_url.endswith('/a2a'):
             agent_url = f"{agent_url}"
+            # Debbie edit
+            agent_url = f"{agent_url}/a2a"
+            # agent_url = f"{agent_url.rstrip('/')}/a2a"
 
         data = {
             "agent_id": agent_id,
@@ -101,6 +121,8 @@ def register_with_registry(agent_id, agent_url, api_url):
         print(f"Error registering agent: {e}")
         return False
 
+# Get {registry}/lookup/{agent_id} returns the agent's URL or NONE
+# Announce itself to find other agents by ID so A2A messages can be routed
 def lookup_agent(agent_id):
     """Look up an agent's URL in the registry"""
     registry_url = get_registry_url()
@@ -117,6 +139,8 @@ def lookup_agent(agent_id):
         print(f"Error looking up agent {agent_id}: {e}")
         return None
 
+# GET {registry}/list returns all agents or NONE on faillure 
+# Announce itself to find other agents by ID so A2A messages can be routed
 def list_registered_agents():
     """Get a list of all registered agents from the registry"""
     registry_url = get_registry_url()
@@ -132,6 +156,8 @@ def list_registered_agents():
         print(f"Error getting list of agents: {e}")
         return None
 
+# Appends a JSON object per line to a file per conversation
+# Fields include timestamp, converation_id, path, source, and message
 def log_message(conversation_id, path, source, message_text):
     """Log each message to a JSON file"""
     timestamp = datetime.now().isoformat()
@@ -151,6 +177,8 @@ def log_message(conversation_id, path, source, message_text):
         log_file.write(json.dumps(log_entry) + "\n")
     
     print(f"Logged message from {source} in conversation {conversation_id}")
+
+# chooses a system prompt (provided or default)
 
 def call_claude(prompt: str, additional_context: str, conversation_id: str, current_path: str, system_prompt: str = None) -> Optional[str]:
     """Wrapper that never raises: returns text or None on failure."""
@@ -191,6 +219,7 @@ def call_claude(prompt: str, additional_context: str, conversation_id: str, curr
         traceback.print_exc()
     return None
 
+# a thinner convenience wrapper
 def call_claude_direct(message_text: str, system_prompt: str = None) -> Optional[str]:
     """Wrapper that never raises: returns text or None on failure."""
     try:
@@ -222,14 +251,17 @@ def call_claude_direct(message_text: str, system_prompt: str = None) -> Optional
         traceback.print_exc()
     return None
 
+# Purpose: If IMPRoVE_MESSAGE is true, call Claude to rephrase the message before forwarding 
 def improve_message(message_text: str, conversation_id: str, current_path: str, additional_prompt: str=None) -> str:
     """Improve a message using Claude before forwarding it to the other party."""
     if not IMPROVE_MESSAGES:
         return message_text
     
     try:
+        # concatenates that with IMPROVE_MESSAGE_PROMPTS["default"]
         if additional_prompt:
             system_prompt = additional_prompt + IMPROVE_MESSAGE_PROMPTS["default"]
+        # uses IMPROVE_MESSAGE_PROMPTS["defaults"]
         else:
             # Use the appropriate improvement prompt based on agent ID
             system_prompt = IMPROVE_MESSAGE_PROMPTS["default"]
@@ -244,11 +276,12 @@ def improve_message(message_text: str, conversation_id: str, current_path: str, 
         return message_text
 
 
-
+# Send to local terminal (A2A, fire-and-forget)
 def send_to_terminal(text, terminal_url, conversation_id, metadata=None):
     """Send a message to a terminal"""
     try:
         print(f"Sending message to {terminal_url}: {text[:50]}...")
+        # builds an A2AClient
         terminal = A2AClient(terminal_url, timeout=30)
         terminal.send_message_threaded(
             Message(
@@ -263,9 +296,10 @@ def send_to_terminal(text, terminal_url, conversation_id, metadata=None):
         print(f"Error sending to terminal {terminal_url}: {e}")
         return False
 
-
+# Purpose: POST a notification payload to a UI webhook so your web/app client can display updates
 def send_to_ui_client(message_text, from_agent, conversation_id):
     # Read UI_CLIENT_URL dynamically to get the latest value
+    # Reads UI_CLIENT_URL dynamically from env each call
     ui_client_url = os.getenv("UI_CLIENT_URL", "")
     print(f"🔍 Dynamic UI_CLIENT_URL: '{ui_client_url}'")
     
@@ -297,7 +331,7 @@ def send_to_ui_client(message_text, from_agent, conversation_id):
         print(f"Error sending to UI client: {e}")
         return False
 
-
+# Purpose: Discover the target agent's bridge URL via the registry and send it an A2A message
 def send_to_agent(target_agent_id, message_text, conversation_id, metadata=None):
     """Send a message to another agent via their bridge"""
     # Look up the agent in the registry
@@ -306,6 +340,11 @@ def send_to_agent(target_agent_id, message_text, conversation_id, metadata=None)
         return f"Agent {target_agent_id} not found in registry"
     
     try:
+        # Normalize trailing slash to avoid .../a2a/a2a
+        # Debbie Edit
+        agent_url = agent_url.rstrip('/')
+
+        # Normalize to /a2a exactly once
         if not agent_url.endswith('/a2a'):
             target_bridge_url = f"{agent_url}/a2a"
             print(f"Adding /a2a to URL: {target_bridge_url}")
@@ -317,6 +356,7 @@ def send_to_agent(target_agent_id, message_text, conversation_id, metadata=None)
         print(f"Sending message to {target_agent_id} at {target_bridge_url}")
 
         agent_id = get_agent_id()
+        # Format payload: Creates a text block with markers
         formatted_message = f"__EXTERNAL_MESSAGE__\n__FROM_AGENT__{agent_id}\n__TO_AGENT__{target_agent_id}\n__MESSAGE_START__\n{message_text}\n__MESSAGE_END__"
         
         # Create simplified metadata
@@ -349,13 +389,31 @@ def send_to_agent(target_agent_id, message_text, conversation_id, metadata=None)
                 metadata=Metadata(custom_fields=send_metadata) if send_metadata else None
             )
         )
+
+        # Debbie Edit
+        reply_text = None
+        try:
+            if hasattr(response, "content") and hasattr(response.content, "text"):
+                reply_text = response.content.text
+            elif isinstance(response, dict):
+                content = response.get("content")
+                if isinstance(content, dict):
+                    reply_text = content.get("text")
+        except Exception:
+            pass
+
+        if not reply_text:
+            reply_text = f"(Delivered to {target_agent_id}, but no reply body was returned.)"
+
+        return reply_text
+        # End Debbie Edit
         
         return f"Message sent to {target_agent_id}"
     except Exception as e:
         print(f"Error sending message to {target_agent_id}: {e}")
         return f"Error sending message to {target_agent_id}: {e}"
 
-
+# Purpose: Ask your central registry for the MCP server endpoint and config for a given qualified_name
 def get_mcp_server_url(requested_registry: str, qualified_name: str) -> Optional[str]:
     """
     Query registry endpoint to find MCP server URL based on qualifiedName.
@@ -395,6 +453,7 @@ def get_mcp_server_url(requested_registry: str, qualified_name: str) -> Optional
         print(f"Error querying MCP server URL: {e}")
         return None
 
+# Build the actual MCP server URL you'll connect to, possibly embedding credentials/config
 def form_mcp_server_url(url: str, config: dict, registry_name: str) -> Optional[str]:
     """
     Form the MCP server URL based on the URL and config.
@@ -424,6 +483,7 @@ def form_mcp_server_url(url: str, config: dict, registry_name: str) -> Optional[
         print(f"Issues with form_mcp_server_url: {e}")
         return None
 
+# Purpose: Execute a query against an MCP server using the right transport
 async def run_mcp_query(query: str, updated_url: str) -> str:
     try:
         print(f"In run_mcp_query: MCP query: {query} on {updated_url}")
@@ -441,6 +501,7 @@ async def run_mcp_query(query: str, updated_url: str) -> str:
         error_msg = f"Error processing MCP query: {str(e)}"
         return error_msg
 
+# Purpose: Monkey-patch A2AClient to add a non-blocking send method if the library version lacks it 
 # Add the threaded method to the A2AClient class if it doesn't exist
 if not hasattr(A2AClient, 'send_message_threaded'):
     def send_message_threaded(self, message: Message):
@@ -455,6 +516,7 @@ if not hasattr(A2AClient, 'send_message_threaded'):
 
 
 # Update handle_message to detect this special format
+# Detect spcial wire format used when agents DM each other through bridges
 def handle_external_message(msg_text, conversation_id, msg):
     """Handle specially formatted external messages"""
     try:
@@ -471,6 +533,7 @@ def handle_external_message(msg_text, conversation_id, msg):
         message_content = ""
         
         # Parse the header fields
+        # Parses header fields 
         in_message = False
         for line in lines[1:]:
             if line.startswith('__FROM_AGENT__'):
@@ -491,6 +554,10 @@ def handle_external_message(msg_text, conversation_id, msg):
         
         # Format the message for display in terminal
         formatted_text = f"FROM {from_agent}: {message_content}"
+
+        # Debbie Edit 
+        # Compute a real reply to return to the sender
+        
         
         print("Message Text: ", message_content)
         print("UI MODE: ", UI_MODE)
@@ -549,8 +616,10 @@ def handle_external_message(msg_text, conversation_id, msg):
 
 
 # Message improvement decorator system
+# A dictionary of {name: function}
 message_improvement_decorators = {}
 
+# registers a function into that dictionary
 def message_improver(name=None):
     """Decorator to register message improvement functions"""
     def decorator(func):
@@ -559,6 +628,7 @@ def message_improver(name=None):
         return func
     return decorator
 
+# utility API to add/fetch/list improvers
 def register_message_improver(name, improver_func):
     """Register a custom message improver function"""
     message_improvement_decorators[name] = improver_func
@@ -589,6 +659,7 @@ def default_claude_improver(message_text: str) -> str:
         print(f"Error improving message: {e}")
         return message_text
 
+# The server with pluggable improver
 class AgentBridge(A2AServer):
     """Global Agent Bridge - Can be used for any agent in the network."""
 
@@ -627,6 +698,8 @@ class AgentBridge(A2AServer):
             print(f"No improver found: {self.active_improver}")
             return message_text
 
+    # all inbound paths
+    # main dispatcher for terminal input, peer/agent messages and special commands 
     def handle_message(self, msg: Message) -> Message:
         # Ensure we have a conversation ID
         conversation_id = msg.conversation_id or str(uuid.uuid4())
@@ -671,11 +744,28 @@ class AgentBridge(A2AServer):
                 conversation_id = conversation_id
             )
         
+        # Debbie Edit
         if user_text.startswith('__EXTERNAL_MESSAGE__'):
-            print("--- External Message Detected ---")
-            external_response = handle_external_message(user_text, conversation_id, msg)
-            if external_response:
-                return external_response
+            # extract body between markers
+            try: 
+                body = user_text.split('__MESSAGE_START__\n', 1)[1].rsplit('\n__MESSAGE_END__', 1)[0]
+            except Exception: 
+                body = ""
+            reply = call_claude(body, "", conversation_id, current_path) or "(empty reply)"
+            return Message(
+                role=MessageRole.AGENT,
+                content=TextContent(text=reply),
+                parent_message_id=msg.message_id,
+                conversation_id=conversation_id
+            )
+        # End DEbbie edit
+        
+        # if user_text.startswith('__EXTERNAL_MESSAGE__'):
+        #     print("--- External Message Detected ---")
+        #     external_response = handle_external_message(user_text, conversation_id, msg)
+        #     if external_response:
+        #         return external_response
+
         
         # Regular processing for messages from the local terminal or peer
         # Handle regular processing for messages from the local terminal or peer
@@ -693,6 +783,7 @@ class AgentBridge(A2AServer):
             log_message(conversation_id, current_path, f"Local user to Agent {agent_id}", user_text)
             print(f"#jinu - User text: {user_text}")
             # Check if this is a message to another agent (starts with @)
+            # @ relay to another agent
             if user_text.startswith("@"):
                 # Parse the recipient
                 parts = user_text.split(" ", 1)
@@ -717,11 +808,13 @@ class AgentBridge(A2AServer):
                     
                     # Return result to user
                     return Message(
+                        # result used to be message_text Debbie
                         role=MessageRole.AGENT,
-                        content=TextContent(text=f"[AGENT {agent_id}]: {message_text}"),
+                        content=TextContent(text=f"[AGENT {agent_id}]: {result}"),
                         parent_message_id=msg.message_id,
                         conversation_id=conversation_id
                     )
+                    
                 else:
                     # Invalid @ command format
                     return Message(
