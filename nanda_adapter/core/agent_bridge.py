@@ -557,7 +557,16 @@ def handle_external_message(msg_text, conversation_id, msg):
 
         # Debbie Edit 
         # Compute a real reply to return to the sender
-        
+        # Compute a real reply to return to the sender
+        agent_id = get_agent_id()
+        reply = call_claude(
+            message_content,
+            additional_context="",
+            conversation_id=conversation_id,
+            current_path=agent_id
+        ) or "Okay."
+
+
         
         print("Message Text: ", message_content)
         print("UI MODE: ", UI_MODE)
@@ -571,7 +580,8 @@ def handle_external_message(msg_text, conversation_id, msg):
             agent_id = get_agent_id()
             return Message(
                 role=MessageRole.AGENT,
-                content=TextContent(text=f"Message received by Agent {agent_id}"),
+                content=TextContent(text=reply),
+                # content=TextContent(text=f"Message received by Agent {agent_id}"),
                 parent_message_id=msg.message_id,
                 conversation_id=conversation_id
             )
@@ -582,7 +592,8 @@ def handle_external_message(msg_text, conversation_id, msg):
                 terminal_client.send_message_threaded(
                     Message(
                         role=MessageRole.USER,
-                        content=TextContent(text=formatted_text),
+                        content=TextContent(text=reply),
+                        # content=TextContent(text=formatted_text),
                         conversation_id=conversation_id,
                         metadata=Metadata(custom_fields={
                             'is_from_peer': True,
