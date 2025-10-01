@@ -1,1 +1,1 @@
-https://chat.nanda-registry.com:6900
+http://3.12.156.164:6900
