@@ -47,7 +47,8 @@ LOCAL_TERMINAL_URL = f"http://localhost:{TERMINAL_PORT}/a2a"
 
 # UI client support
 #flags for a browser/UI client to subscribe to updates 
-UI_MODE = os.getenv("UI_MODE", "true").lower() in ("true", "1", "yes", "y")
+# Rahul help :) Debbie Edit
+UI_MODE = os.getenv("UI_MODE", "false").lower() in ("true", "1", "yes", "y")
 UI_CLIENT_URL = os.getenv("UI_CLIENT_URL", "")
 # we set registered_ui_clients. we will add to it later. 
 registered_ui_clients = set()
@@ -603,6 +604,8 @@ def handle_external_message(msg_text, conversation_id, msg):
                         })
                     )
                 )
+                # Print reply variable
+                print(reply)
                 
                 # Acknowledge receipt to sender
                 agent_id = get_agent_id()
@@ -818,6 +821,7 @@ class AgentBridge(A2AServer):
                     })
                     
                     # Return result to user
+                    print(result)
                     return Message(
                         # result used to be message_text Debbie
                         role=MessageRole.AGENT,
