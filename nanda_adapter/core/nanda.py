@@ -14,6 +14,10 @@ import requests
 import random
 import threading
 
+# Import AgentFacts
+from nanda_adapter.core.agentfacts import AgentFacts
+facts = None
+
 # Handle different import contexts
 try:
     from .agent_bridge import *
@@ -67,6 +71,39 @@ class NANDA:
         public_url = os.getenv("PUBLIC_URL")
         api_url = os.getenv("API_URL")
         agent_id = os.getenv("AGENT_ID")
+
+        # Initialize AgentFacts init: Debbie
+        global facts
+        MONGO_URL = os.getenv("MONGO_URL")  # same one your registry/bridge uses
+        DB_NAME   = os.getenv("DB_NAME", "agent_registry")
+        facts = AgentFacts(MONGO_URL, DB_NAME)
+
+        if public_url:
+            register_with_registry(agent_id, public_url, api_url)
+        else:
+            print("WARNING: PUBLIC_URL environment variable not set. Agent will not be registered.")
+
+        # Publish a self AgentFacts card once URLs and IDs are known
+        try:
+            facts.set(
+                agent_id,
+                "card:self",
+                {
+                    "@type": "AgentFacts",
+                    "agent_name": agent_id,
+                    "label": "NANDA Adapter Agent",
+                    "description": "Improves messages and supports A2A messaging + points quotes",
+                    "version": "0.1.0",
+                    "endpoints": {"a2a": public_url or f"http://localhost:{PORT}"},
+                    "capabilities": {"skills": ["improve_message", "a2a_quote_points"]},
+                    "economy": {"pricing": {"unit": "POINTS", "range": [5, 10]}},
+                    "observedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+            print("🧠 AgentFacts card published: key=card:self")
+        except Exception as e:
+            print(f"⚠️ Failed to publish AgentFacts card: {e}")
+        # Debbie
 
         ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY") or "your key"
         AGENT_ID = os.getenv("AGENT_ID", "default")  # Default to 'default' if not specified
