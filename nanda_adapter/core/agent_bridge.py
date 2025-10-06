@@ -18,6 +18,9 @@ import asyncio
 from mcp_utils import MCPClient
 import base64
 
+# Import payments
+from nanda_adapter.core.payments import quote_and_charge_points_via_a2a
+
 import sys
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -814,6 +817,20 @@ class AgentBridge(A2AServer):
 
                     print(f"#jinu - Target agent: {target_agent}")
                     print(f"#jinu - Imoproved message text: {message_text}")
+
+                    # Payment negotiation (quote + charge + A2A)
+                    try:
+                        payment_result = quote_and_charge_points_via_a2a(
+                            username=os.getenv("USER", "unknown"),
+                            peer_identifier=f"@{target_agent}",
+                            question=message_text,
+                            use_x402=True
+                        )
+                        print("💸 Payment quote result:", payment_result)
+                    except Exception as e:
+                        print("⚠️ Payment negotiation failed:", e)
+                    # Debbie Code
+
                     # Send to the target agent's bridge
                     result = send_to_agent(target_agent, message_text, conversation_id, {
                         'path': current_path,
